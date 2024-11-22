@@ -36,6 +36,7 @@ def read_json_property(jsonfile, property):
     return slide_id
 
 def find_scaling_factor(task, slide_id):
+    # TODO: Read the spacing of slide and thumbnail and calculate the scaling factor using that
     # Find the scaling factor given a PHAS server slide ID
     # When downsampling, the largest dimension is scaled to 1000 pixels
     x, y = phas.Slide(task, slide_id).dimensions
@@ -62,10 +63,8 @@ def process_roi_data(roi, scale):
     x_roi = np.array(x_roi)
     y_roi = np.array(y_roi)
 
-    # x_scaled_roi = ((x_roi+0.5) * nissl_scale).astype(int)
-    # y_scaled_roi = ((y_roi+0.5) * scale).astype(int)
-    x_scaled_roi = x_roi * scale
-    y_scaled_roi = y_roi * scale
+    x_scaled_roi = (x_roi + 0.5) * scale
+    y_scaled_roi = (y_roi + 0.5) * scale
 
     # Return in the same format as input - list of lists
     xy_scaled = [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi)]
@@ -80,6 +79,7 @@ def get_chunk_id(registration_dir, x, y):
     # Read the multi chunk mask from the registration directory
     chunk_mask = sitk.ReadImage(f"{registration_dir}/reference_multi_chunk.nii.gz")
     chunk_mask = chunk_mask[:, :,0]
+    # sitk.GetArrayFromImage returns a numpy array with flipped coordinates
     chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)
 
     chunk_ids = [ x for x in np.unique(chunk_mask) if x != 0 ]
@@ -89,16 +89,15 @@ def get_chunk_id(registration_dir, x, y):
         mask = sitk.BinaryThreshold(chunk_mask, k-0.5, k+0.5, 1, 0)
         return sitk.SignedDanielssonDistanceMap(mask, insideIsPositive=False, squaredDistance=True)
 
-    # XXX: why are the coordinates flipped?
     # If a point lies outside the mask, then use the nearest chunk
-    if chunk_mask_arr[y, x] == 0:
+    if chunk_mask_arr[(y, x)] == 0:
         # XXX: understand the logic here
         dist_cmask = { k: chunk_dist_map(k) for k in chunk_ids }
         # changed ((y,x)) see if it works
         dist = np.array([ dist_cmask[k].GetPixel((y,x)) for k in chunk_ids ])
         chunk = chunk_ids[np.argmin(dist)]
     else: # Check value of the label at given location
-        chunk = chunk_mask[y, x]
+        chunk = chunk_mask_arr[(y, x)]
     chunk_str = f"{chunk:02d}"
     chunk_rigid = np.loadtxt(f"{registration_dir}/output_piecewise_rigid_{chunk_str}.mat")
     chunk_warp = sitk.ReadImage(f"{registration_dir}/output_piecewise_deformable_{chunk_str}.nii.gz")
@@ -113,6 +112,9 @@ def map_sampling_roi(task_id, root_dir, block_json):
     nissl_slide_id = read_json_property(block_json, 'nissl_slide_id')
     tau_slide_id = read_json_property(block_json, 'tau_slide_id')
 
+    tau_slide_thumbnail = sitk.ReadImage(f"{root_dir}/{specimen}/{block}/tau_slide_thumbnail.nii.gz")[:,:,0]
+    print(f"Read thumbnail for slide {tau_slide_id} {tau_slide_thumbnail.GetSize()}")
+
     # Registration files
     registration_dir = f"{root_dir}/{specimen}/{block}/registration"
     global_rigid = np.loadtxt(f"{registration_dir}/output_global_rigid.mat")
@@ -122,32 +124,34 @@ def map_sampling_roi(task_id, root_dir, block_json):
 
     def my_transform(roi_xy):
         # Apply the transformations to the sampling ROI in the opposite order
-        # i.e first the piecewise deformable, then the piecewise rigid, and finally the global rigid
+        # i.e first the piecewise deformable, then the piecewise rigid
         # All transformations are applied in the physical space
         xy = np.array(roi_xy)
         # Determing which chunk containes the given point
         chunk_warp, chunk_rigid = get_chunk_id(registration_dir, int(xy[0]), int(xy[1]))
         # Deformable transform is saved as dispalcement field in the physical space
         # Get the coordinates in physical space
-        xy_phys = np.array(chunk_warp.TransformIndexToPhysicalPoint([int(xy[0]), int(xy[1])]))
+        xy_phys = np.array(chunk_warp.TransformContinuousIndexToPhysicalPoint(xy))
         # Step 1 - Piecewise deformable transform
-        displacement = chunk_warp.EvaluateAtPhysicalPoint(xy_phys)
+        displacement = chunk_warp.EvaluateAtContinuousIndex(xy)
         xy_warp = xy_phys + displacement
         # Before the next step, there are some transformations to be done
         # XXX: Why are we flipping the coordinates? ITK-SNAP says the orientation
         # is RAI and shows all physical space coordinates as negative
-        xy_warp = -xy_warp # transformation to RAS??
+        # xy_warp = -xy_warp # transformation to RAS??
         # Homogeneous coordinates for matrix multiplication
-        xy_warp_homogeneous = np.append(xy_warp, 1) # [x,y,1]
-        xy_warp_homogeneous = xy_warp_homogeneous.reshape(3,1)
+
+        # TODO: Instead of homogeneous do Ax + b
+        A = chunk_rigid[:2, :2]
+        b = chunk_rigid[:2, 2]
         # Step 2 - Piecewise rigid transform
-        xy_chunk_rigid = np.dot(chunk_rigid, xy_warp_homogeneous) # [x',y',1]
-        # Step 3 - Global rigid transform
-        xy_global = np.dot(global_rigid, xy_chunk_rigid) # [x'',y'',1]
-        xy_global = -xy_global # transformation to RAS??
-        xy_global = xy_global[:2] # [x'',y'']
-        # Get coordinates from physical space to index space
-        xy_remap = np.array(chunk_warp.TransformPhysicalPointToIndex([float(xy_global[0]), float(xy_global[1])]))
+        # xy_chunk_rigid = np.dot(chunk_rigid, xy_warp_homogeneous) # [x',y',1]
+
+        xy_chunk_rigid = np.dot(A, xy_warp) - b # -b to ensure all coordinates are in RAS
+
+        # Get coordinates from physical space to index space in the moving image
+        xy_remap = np.array(tau_slide_thumbnail.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
+        # xy_remap = np.array(chunk_warp.TransformPhysicalPointToIndex(xy_chunk_rigid[0], xy_chunk_rigid[1]))
 
         return xy_remap[0], xy_remap[1]
 
@@ -163,7 +167,6 @@ def map_sampling_roi(task_id, root_dir, block_json):
         roi_id = task.create_sampling_roi(tau_slide_id, roi['label'], roi_fullres_warped)
         print(f"Created ROI {roi['label']} for slide {tau_slide_id}")
 
-        break
 
 if __name__ == '__main__':
     parse = argparse.ArgumentParser(description="Map sampling ROI from NISSL to another stain")
