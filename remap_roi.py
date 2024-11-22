@@ -1,11 +1,11 @@
+import argparse
 import subprocess
 import sys
+import warnings
+warnings.filterwarnings("ignore")
 
 import json
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from PIL import Image
 import SimpleITK as sitk
 
 
@@ -14,16 +14,20 @@ import SimpleITK as sitk
 # This makes sure you are using the latest version of the code
 sys.path.append('/Users/cathalye/Packages/histoannot/')
 import phas.client.api as phas
-from phas.dltrain import spatial_transform_roi, draw_sampling_roi, compute_sampling_roi_bounding_box
+from phas.dltrain import spatial_transform_roi
 
 
-# To get the API key you need to go to https://histo.itksnap.org/auth/api/generate_key
-PHAS_URL='https://histo.itksnap.org'
-PRIVATE_KEY = '/Users/cathalye/.private/histoitk_api_key.json'
-conn = phas.Client(PHAS_URL, PRIVATE_KEY)
-TASK_ID = 39
-# Create a sampling ROI task object to pass to Slide class for downloading sampling ROI json
-task = phas.SamplingROITask(conn, TASK_ID)
+
+def connect_to_server(task):
+    # PHAS connection parameters
+    PHAS_URL='https://histo.itksnap.org'
+    PRIVATE_KEY = '/Users/cathalye/.private/histoitk_api_key.json'
+
+    conn = phas.Client(PHAS_URL, PRIVATE_KEY)
+    # Create a sampling ROI task object to pass to Slide class for downloading sampling ROI json
+    task = phas.SamplingROITask(conn, task)
+
+    return task
 
 def read_json_property(jsonfile, property):
     with open(jsonfile, 'r') as file:
@@ -32,134 +36,140 @@ def read_json_property(jsonfile, property):
     return slide_id
 
 def find_scaling_factor(task, slide_id):
+    # Find the scaling factor given a PHAS server slide ID
+    # When downsampling, the largest dimension is scaled to 1000 pixels
     x, y = phas.Slide(task, slide_id).dimensions
-    # When downsampling, the largest dimension is scaled to 1000
     if x > y:
         scale = 1000 / x
     else:
         scale = 1000 / y
     return scale
 
-# Single test subject
-ROOT_DIR = "/Users/cathalye/Library/CloudStorage/Box-Box/chinmayee/202411_pmam_late/data/"
-# Define this for dummy data
-block_json = "/Users/cathalye/Library/CloudStorage/Box-Box/chinmayee/202411_pmam_late/data/INDD102373/HL3a/block_info.json"
-# Read from json
-specimen = read_json_property(block_json, 'specimen')
-block = read_json_property(block_json, 'block')
-nissl_slide_id = read_json_property(block_json, 'nissl_slide_id')
-tau_slide_id = read_json_property(block_json, 'tau_slide_id')
-# Registration files
-registration_dir = f"{ROOT_DIR}/{specimen}/{block}/registration"
-global_rigid = np.loadtxt(f"{registration_dir}/output_global_rigid.mat")
-multi_chunk_mask = sitk.ReadImage(f"{registration_dir}/reference_multi_chunk.nii.gz")
-multi_chunk_mask = np.squeeze(sitk.GetArrayFromImage(multi_chunk_mask))
+def process_roi_data(roi, scale):
+    # Load the json data from the ROI
+    # TODO: How to handle this case elegantly?
+    try:
+        roi = json.loads(roi['json'])
+    except:
+        pass
+    # It should contain the following fields:
+    #   'type': polygon or trapezium dtype = string
+    #   'data': [[x1, y1], [x2, y2], ...] dtype = list of lists
+    x_roi, y_roi = zip(*roi['data'])
+    assert len(x_roi) == len(y_roi), "x_roi and y_roi must have the same length"
 
-# Read the downsampled nissl slide and get the spacing
-# nissl_slide_downsampled = sitk.ReadImage(f"{ROOT_DIR}/{specimen}/{block}/nissl_slide_thumbnail.nii.gz")
-nissl_slide = phas.Slide(task, nissl_slide_id)
-nissle_slide_spacing = nissl_slide.spacing
-nissl_thumbnail = sitk.ReadImage(f"{ROOT_DIR}/{specimen}/{block}/nissl_slide_thumbnail.nii.gz")
-nissl_thumbnail_spacing = nissl_thumbnail.GetSpacing()
+    # Convert to numpy array to do element-wise operations
+    x_roi = np.array(x_roi)
+    y_roi = np.array(y_roi)
 
-chunk = '01'
-chunk_rigid = np.loadtxt(f"{registration_dir}/output_piecewise_rigid_{chunk}.mat")
-chunk_warp = sitk.ReadImage(f"{registration_dir}/output_piecewise_deformable_{chunk}.nii.gz")
+    # x_scaled_roi = ((x_roi+0.5) * nissl_scale).astype(int)
+    # y_scaled_roi = ((y_roi+0.5) * scale).astype(int)
+    x_scaled_roi = x_roi * scale
+    y_scaled_roi = y_roi * scale
 
-# Get the sampling ROI coordinates
-# XXX: roi_task.slide_sampling_rois() returns a list of ROIs, but we are only using the first one
-roi = task.slide_sampling_rois(nissl_slide_id)[1]
-roi_data = json.loads(roi['json'])
+    # Return in the same format as input - list of lists
+    xy_scaled = [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi)]
 
-# If we are scaling the ROI
-x_roi, y_roi = zip(*roi_data['data'])
-assert len(x_roi) == len(y_roi), "x_roi and y_roi must have the same length"
-# Convert to numpy array to do element-wise operations
-x_roi = np.array(x_roi)
-y_roi = np.array(y_roi)
+    roi_scaled = roi.copy()
+    roi_scaled['data'] = xy_scaled
 
-scale = find_scaling_factor(task, nissl_slide_id)
-x_scaled_roi = ((x_roi+0.5) * scale).astype(int)
-y_scaled_roi = ((y_roi+0.5) * scale).astype(int)
-
-print(x_scaled_roi)
-
-chunk_label = []
-for i in range(len(x_scaled_roi)):
-    x = x_scaled_roi[i]
-    y = y_scaled_roi[i]
-    chunk_label.append(multi_chunk_mask[y, x])
-
-chunk_label = np.array(chunk_label)
-print(f"The ROI lies in chunk # {np.unique(chunk_label)}")
-
-# xy_scaled coordinates are correct - double checked with the ROI
-# segmentation masks in ITK-SNAP
-xy_scaled = [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi)]
-roi_data_scaled = roi_data.copy()
-roi_data_scaled['data'] = xy_scaled
-print(roi_data_scaled)
-
-# displacement = chunk_warp.EvaluateAtPhysicalPoint((-20, -40))
-# print("Displacement at (-20, -40):", displacement)
-
-def my_transform(roi_xy):
-    xy = np.array(roi_xy)
-
-    # Get the coordinates in physical space
-    # xy_phys = (xy + 0.5) * nissl_slide.spacing *(1) # if using full resolution xy
-    # xy_phys = (xy + 0.5) * nissl_thumbnail_spacing[0] * (-1) # if using downsampled xy
-    xy_phys = np.array(chunk_warp.TransformIndexToPhysicalPoint([int(xy[0]), int(xy[1])]))
-
-    displacement = chunk_warp.EvaluateAtPhysicalPoint(xy_phys)
-    xy_warp = xy_phys + displacement
-
-    xy_warp = -xy_warp # transformation to RAS??
-
-    xy_warp_homogeneous = np.append(xy_warp, 1) # [x,y,1]
-    xy_warp_homogeneous = xy_warp_homogeneous.reshape(3,1)
-
-    # Apply the chunk rigid transform
-    xy_chunk_rigid = np.dot(chunk_rigid, xy_warp_homogeneous) # [x',y',1]
-
-    # Apply the global rigid transform
-    xy_global = np.dot(global_rigid, xy_chunk_rigid) # [x'',y'',1]
-
-    xy_global = -xy_global # transformation to RAS??
-
-    # Convert from physical space to image space
-    # xy_warp_img = xy_global / nissl_slide.spacing * (-1) - 0.5 # if using full resolution xy
-    # xy_warp_img = xy_warp / nissl_thumbnail_spacing[0] * (-1) - 0.5 # if using downsampled xy
-
-    xy_global = xy_global[:2] # [x'',y'']
-
-    xy_remap = np.array(chunk_warp.TransformPhysicalPointToIndex([float(xy_global[0]), float(xy_global[1])]))
-
-    return xy_remap[0], xy_remap[1]
+    return roi_scaled
 
 
-# roi_warped = spatial_transform_roi(roi_data, my_transform) # if using full resolution xy
-roi_warped = spatial_transform_roi(roi_data_scaled, my_transform) # if using downsampled xy
-print(roi_warped)
+def get_chunk_id(registration_dir, x, y):
+    # Read the multi chunk mask from the registration directory
+    chunk_mask = sitk.ReadImage(f"{registration_dir}/reference_multi_chunk.nii.gz")
+    chunk_mask = chunk_mask[:, :,0]
+    chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)
+
+    chunk_ids = [ x for x in np.unique(chunk_mask) if x != 0 ]
+
+    def chunk_dist_map(k):
+        # Extract only the chunk with label k
+        mask = sitk.BinaryThreshold(chunk_mask, k-0.5, k+0.5, 1, 0)
+        return sitk.SignedDanielssonDistanceMap(mask, insideIsPositive=False, squaredDistance=True)
+
+    # XXX: why are the coordinates flipped?
+    # If a point lies outside the mask, then use the nearest chunk
+    if chunk_mask_arr[y, x] == 0:
+        # XXX: understand the logic here
+        dist_cmask = { k: chunk_dist_map(k) for k in chunk_ids }
+        # changed ((y,x)) see if it works
+        dist = np.array([ dist_cmask[k].GetPixel((y,x)) for k in chunk_ids ])
+        chunk = chunk_ids[np.argmin(dist)]
+    else: # Check value of the label at given location
+        chunk = chunk_mask[y, x]
+    chunk_str = f"{chunk:02d}"
+    chunk_rigid = np.loadtxt(f"{registration_dir}/output_piecewise_rigid_{chunk_str}.mat")
+    chunk_warp = sitk.ReadImage(f"{registration_dir}/output_piecewise_deformable_{chunk_str}.nii.gz")
+
+    return chunk_warp, chunk_rigid
+
+def map_sampling_roi(task_id, root_dir, block_json):
+    task = connect_to_server(task_id)
+    # Read from json
+    specimen = read_json_property(block_json, 'specimen')
+    block = read_json_property(block_json, 'block')
+    nissl_slide_id = read_json_property(block_json, 'nissl_slide_id')
+    tau_slide_id = read_json_property(block_json, 'tau_slide_id')
+
+    # Registration files
+    registration_dir = f"{root_dir}/{specimen}/{block}/registration"
+    global_rigid = np.loadtxt(f"{registration_dir}/output_global_rigid.mat")
+
+    nissl_scaling = find_scaling_factor(task, nissl_slide_id)
+    tau_scaling = find_scaling_factor(task, tau_slide_id)
+
+    def my_transform(roi_xy):
+        # Apply the transformations to the sampling ROI in the opposite order
+        # i.e first the piecewise deformable, then the piecewise rigid, and finally the global rigid
+        # All transformations are applied in the physical space
+        xy = np.array(roi_xy)
+        # Determing which chunk containes the given point
+        chunk_warp, chunk_rigid = get_chunk_id(registration_dir, int(xy[0]), int(xy[1]))
+        # Deformable transform is saved as dispalcement field in the physical space
+        # Get the coordinates in physical space
+        xy_phys = np.array(chunk_warp.TransformIndexToPhysicalPoint([int(xy[0]), int(xy[1])]))
+        # Step 1 - Piecewise deformable transform
+        displacement = chunk_warp.EvaluateAtPhysicalPoint(xy_phys)
+        xy_warp = xy_phys + displacement
+        # Before the next step, there are some transformations to be done
+        # XXX: Why are we flipping the coordinates? ITK-SNAP says the orientation
+        # is RAI and shows all physical space coordinates as negative
+        xy_warp = -xy_warp # transformation to RAS??
+        # Homogeneous coordinates for matrix multiplication
+        xy_warp_homogeneous = np.append(xy_warp, 1) # [x,y,1]
+        xy_warp_homogeneous = xy_warp_homogeneous.reshape(3,1)
+        # Step 2 - Piecewise rigid transform
+        xy_chunk_rigid = np.dot(chunk_rigid, xy_warp_homogeneous) # [x',y',1]
+        # Step 3 - Global rigid transform
+        xy_global = np.dot(global_rigid, xy_chunk_rigid) # [x'',y'',1]
+        xy_global = -xy_global # transformation to RAS??
+        xy_global = xy_global[:2] # [x'',y'']
+        # Get coordinates from physical space to index space
+        xy_remap = np.array(chunk_warp.TransformPhysicalPointToIndex([float(xy_global[0]), float(xy_global[1])]))
+
+        return xy_remap[0], xy_remap[1]
 
 
-# Scale the transformed points back to full resolution
-x_warped, y_warped = zip(*roi_warped['data'])
-assert len(x_warped) == len(y_warped), "x_roi and y_roi must have the same length"
-# Convert to numpy array to do element-wise operations
-x_warped = np.array(x_warped)
-y_warped = np.array(y_warped)
+    # Get the sampling ROI coordinates
+    for roi in task.slide_sampling_rois(nissl_slide_id):
+        roi_scaled = process_roi_data(roi, nissl_scaling)
+        print("Done processing ROI data")
+        roi_warped = spatial_transform_roi(roi_scaled, my_transform)
+        print("Done warping ROI")
+        roi_fullres_warped = process_roi_data(roi_warped, 1/tau_scaling) # we are scaling up hence 1/scale
 
+        roi_id = task.create_sampling_roi(tau_slide_id, roi['label'], roi_fullres_warped)
+        print(f"Created ROI {roi['label']} for slide {tau_slide_id}")
 
-scale_ihc = find_scaling_factor(task, tau_slide_id)
-x_full_res = x_warped / scale_ihc
-y_full_res = y_warped / scale_ihc
+        break
 
-xy_full_res = [list(pair) for pair in zip(x_full_res, y_full_res)]
-roi_warped['data'] = xy_full_res
+if __name__ == '__main__':
+    parse = argparse.ArgumentParser(description="Map sampling ROI from NISSL to another stain")
+    parse.add_argument('--task_id', type=int, default=39, help='Task ID on the PHAS server')
+    parse.add_argument('--root_dir', type=str, default='./data/', help='Root directory of the data')
+    parse.add_argument('--block_json', type=str, help='Path to block json file')
+    args = parse.parse_args()
 
-print("origina", roi_data)
-print("warped", roi_warped)
-
-roi_id = task.create_sampling_roi(tau_slide_id, roi['label'], roi_warped)
-# print(roi_id)
+    map_sampling_roi(args.task_id, args.root_dir, args.block_json)
