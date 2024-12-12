@@ -47,21 +47,22 @@ for specimen in os.listdir(ROOT_DIR):
 
         # Step 2 - Get binanry mask of the reference image
         # Otsu thresholding to get a binary mask
-        otsu_filter = sitk.OtsuThresholdImageFilter()
-        otsu_filter.SetInsideValue(1)
-        otsu_filter.SetOutsideValue(0)
-        binary_image = otsu_filter.Execute(reference_scalar_img)
-
-        # Otsu thresholding segmentation has holes in the mask due to the irregular
-        # staining. Closing to fill in holes.
-        structuring_element = sitk.sitkBall
-        radius = [5, 5, 5]
-        closed_image = sitk.BinaryMorphologicalClosing(
-            binary_image, radius, structuring_element
-        )
-
         reference_binary_mask = f"{registration_dir}/reference_binary_mask.nii.gz"
-        sitk.WriteImage(closed_image, reference_binary_mask)
+        # If manual mask exists, don't overwrite with automatic mask
+        if not os.path.exists(reference_binary_mask):
+            otsu_filter = sitk.OtsuThresholdImageFilter()
+            otsu_filter.SetInsideValue(1)
+            otsu_filter.SetOutsideValue(0)
+            binary_image = otsu_filter.Execute(reference_scalar_img)
+
+            # Otsu thresholding segmentation has holes in the mask due to the irregular
+            # staining. Closing to fill in holes.
+            structuring_element = sitk.sitkBall
+            radius = [5, 5, 5]
+            closed_image = sitk.BinaryMorphologicalClosing(
+                binary_image, radius, structuring_element
+            )
+            sitk.WriteImage(closed_image, reference_binary_mask)
 
         # Step 3 - Divide the mask into chunks using image graph cut
         # For simplicity, we will define a fixed number of chunks
