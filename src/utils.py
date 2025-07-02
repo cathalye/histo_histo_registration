@@ -1,20 +1,28 @@
+import os
+import sys
 import json
+
+import numpy as np
 
 sys.path.append('/Users/cathalye/Packages/histoannot/')
 import phas.client.api as phas
 from phas.dltrain import spatial_transform_roi
 
 
-def connect_to_server(task):
+def connect_to_server(task_id):
     # PHAS connection parameters
     PHAS_URL='https://histo.itksnap.org'
     PRIVATE_KEY = '/Users/cathalye/.private/histoitk_api_key.json'
 
     conn = phas.Client(PHAS_URL, PRIVATE_KEY)
     # Create a sampling ROI task object to pass to Slide class for downloading sampling ROI json
-    task = phas.SamplingROITask(conn, task)
+    task = phas.SamplingROITask(conn, task_id)
 
     return task
+
+
+def reset_slide(task: phas.SamplingROITask, slide_id):
+    task.delete_sampling_rois_on_slide(slide_id)
 
 
 def read_json_property(jsonfile, property):
@@ -24,24 +32,29 @@ def read_json_property(jsonfile, property):
     return slide_id
 
 
-def get_nearest_chunk_map(chunk_mask):
-    # Explanation of this function in nearest_chunk_map.ipynb
-    chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)
+def process_roi_data(roi_data, type, scale=1):
+    if type == 'polygon':
+        x_roi, y_roi = zip(*roi_data)
+        assert len(x_roi) == len(y_roi), "x_roi and y_roi must have the same length"
+        x_roi = np.array(x_roi)
+        y_roi = np.array(y_roi)
 
-    chunk_labels = np.unique(chunk_mask_arr)
-    chunk_labels = chunk_labels[chunk_labels != 0] # Remove the background label
+        x_scaled_roi = (x_roi + 0.5) * scale
+        y_scaled_roi = (y_roi + 0.5) * scale
 
-    def _get_dist_from_chunk(k):
-        # Get the distance of every pixel from the boundary of the chunk with label k
-        mask = sitk.BinaryThreshold(chunk_mask, int(k), int(k), 1, 0) # Extract only the chunk with label k
-        return sitk.SignedDanielssonDistanceMap(mask, insideIsPositive=False, squaredDistance=True)
+        return [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi)]
 
+    elif type == 'trapezoid':
+        x_roi, y_roi, w_roi = zip(*roi_data)
+        assert len(x_roi) == len(y_roi) == len(w_roi), "x_roi, y_roi, and w_roi must have the same length"
+        x_roi = np.array(x_roi)
+        y_roi = np.array(y_roi)
+        w_roi = np.array(w_roi)
 
-    dist_maps_all_chunks = { k: _get_dist_from_chunk(k) for k in chunk_ids }
-    dist_map_all_chunks = np.array([ dist_maps_all_chunks[k] for k in chunk_ids ])
-    # Find the chunk with the minimum distance to a given point
-    nearest_chunk = chunk_ids[np.argmin(dist_maps_all_chunks, axis = 0)]
+        x_scaled_roi = (x_roi + 0.5) * scale
+        y_scaled_roi = (y_roi + 0.5) * scale
+        w_scaled_roi = w_roi * scale
 
-    nearest_chunk_map = np.reshape(nearest_chunk, chunk_mask_arr.shape)
-
-    return nearest_chunk_map
+        return [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi, w_scaled_roi)]
+    else:
+        raise ValueError(f"Unknown ROI type: {type}")

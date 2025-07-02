@@ -17,6 +17,7 @@ Outputs
 """
 
 import subprocess
+import sys
 
 import numpy as np
 import SimpleITK as sitk
@@ -37,7 +38,7 @@ class HistologyData:
         if thumbnail_path is None:
             self.thumbnail = None
         else:
-            self.thumbnail = sitk.ReadImage(thumbnail_path)
+            self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
             self.thumbnail_size = self.thumbnail.GetSize()
 
         self.get_scaling_factor()
@@ -53,17 +54,24 @@ class HistologyData:
             self.scaling_factor = 1000 / self.full_size[1]
 
 
-    def get_full_coord_from_thumbnail(self, x, y):
+    def get_thumbnail_coord_from_full(self, x, y):
         # Integer coordinates in the thumbnail are in the center of the voxel
         # Hence the +0.5 for adjustment
-        x_full = (x+0.5) * self.scaling_factor
-        y_full = (y+0.5) * self.scaling_factor
+        x_thumbnail = (x + 0.5) * self.scaling_factor
+        y_thumbnail = (y + 0.5) * self.scaling_factor
+
+        return x_thumbnail, y_thumbnail
+
+
+    def get_full_coord_from_thumbnail(self, x, y):
+        x_full = (x + 0.5) / self.scaling_factor
+        y_full = (y + 0.5) / self.scaling_factor
 
         return x_full, y_full
 
 
     def get_single_channel_image(self, channel=0):
-        single_channel_image = sitk.VectorIndexSelectionCast(self.sitk_image, channel)
+        single_channel_image = sitk.VectorIndexSelectionCast(self.thumbnail, channel)
         return single_channel_image
 
 
