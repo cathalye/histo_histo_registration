@@ -38,6 +38,8 @@ class HistologyData:
         if thumbnail_path is None:
             self.thumbnail = None
         else:
+            # HACK: this is needed for remap_roi xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
+            # to not get vector dimension error
             self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
             self.thumbnail_size = self.thumbnail.GetSize()
 

@@ -12,6 +12,8 @@ import SimpleITK as sitk
 ROOT_DIR = "./data"
 
 for specimen in os.listdir(ROOT_DIR):
+    if specimen.startswith("."):
+        continue
     specimen_dir = os.path.join(ROOT_DIR, specimen)
     for block in os.listdir(specimen_dir):
         block_dir = os.path.join(specimen_dir, block)

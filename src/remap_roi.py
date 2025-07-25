@@ -22,7 +22,7 @@ from phas.dltrain import spatial_transform_roi
 import utils
 
 
-class Remap:
+class RemapROI:
 
     def __init__(self, registration_dir, moving_slide: HistologyData):
         self.registration_dir = registration_dir
@@ -62,7 +62,7 @@ class Remap:
         return chunk_warp, chunk_rigid
 
 
-    def remap_roi(self, xy):
+    def registration_transform(self, xy):
         # Apply the transformations to the sampling ROI in the opposite order
         # i.e first the piecewise deformable, then the piecewise rigid
         # All transformations are applied in the physical space]
@@ -95,7 +95,7 @@ class Remap:
         # So to skip the back and forth conversion between LPS and RAS, we can
         # directly apply A @ X_warp - b to get the coordinates in LPS
         xy_chunk_rigid = A @ xy_warp - b # -b to ensure all coordinates are in RAS
-        
+
         # Get coordinates from physical space to index space in the moving image
         xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
 

@@ -12,7 +12,7 @@ from phas.dltrain import spatial_transform_roi
 
 sys.path.append('../src')
 from histology_data import HistologyData
-from remap import Remap
+from remap_roi import RemapROI
 import utils
 
 
@@ -34,6 +34,7 @@ if __name__ == '__main__':
 
     if not os.path.exists(f"{args.root_dir}/{specimen}/{block}/result_workspace.itksnap"):
         print(f"Skipping {specimen} {block}. Registration workspace not found.")
+        exit()
     else:
         registration_dir = f"{args.root_dir}/{specimen}/{block}/registration"
 
@@ -46,7 +47,7 @@ if __name__ == '__main__':
     tau_slide = HistologyData(task, tau_slide_id, tau_thumbnail_path)
 
     # Create the Remap object
-    remap = Remap(registration_dir, tau_slide)
+    remap = RemapROI(registration_dir, tau_slide)
 
     # Reset the sampling ROI on the Tau slide
     utils.reset_slide(task, tau_slide_id)
@@ -66,7 +67,7 @@ if __name__ == '__main__':
         roi_thumbnail_json['data'] = utils.process_roi_data(roi_data, roi_type, nissl_slide.scaling_factor)
 
         # Apply the remapping to the ROI
-        roi_warped = spatial_transform_roi(roi_thumbnail_json, remap.remap_roi)
+        roi_warped = spatial_transform_roi(roi_thumbnail_json, remap.registration_transform)
 
         # Get the ROI coordinates in the full resolution space for the tau slide
         roi_fullres_warped = utils.process_roi_data(roi_warped['data'], roi_type, 1/tau_slide.scaling_factor)
