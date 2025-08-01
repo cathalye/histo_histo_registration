@@ -33,21 +33,38 @@ from phas.dltrain import spatial_transform_roi
 class HistologyData:
 
     def __init__(self, task: phas.SamplingROITask, slide_id, thumbnail_path=None):
-        self.slide = phas.Slide(task, slide_id)
-        self.full_size = self.slide.dimensions
+        if task is None:
+            self.slide = None
+        else:
+            self.slide = phas.Slide(task, slide_id)
+            self.full_size = self.slide.dimensions
+
         if thumbnail_path is None:
             self.thumbnail = None
         else:
-            # HACK: this is needed for remap_roi xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
+            # NOTE:
+            # [:, :, 0] is needed for
+            # (1) registration.py to not throw a segmentation fault (!!!!)
+            # (2) remap_roi xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
             # to not get vector dimension error
+            #
+            # Nifti is file format for mainly 3D images whereas histology images are 2D
+            # So histology images are store as (width, height, 1) - even RGB images
+            # This is because the RGB values are stored as vectors
+            # sitk.ReadImage reads chead RGB histology image as (width, height, 1)
+            # [:, :, 0] drops the last dimension
+            #
+            # When sitk (width, height) image is converted to numpy array, it is (width, height, 3) as expected for RGB images
+            # It also plays well with VectorIndexSelectionCast
             self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
+            # self.thumbnail = sitk.ReadImage(thumbnail_path)
             self.thumbnail_size = self.thumbnail.GetSize()
 
-        self.get_scaling_factor()
+        self._get_scaling_factor()
 
 
-    def get_scaling_factor(self):
-        if self.thumbnail is None:
+    def _get_scaling_factor(self):
+        if self.thumbnail is None or self.slide is None:
             self.scaling_factor = 1
         # When downsampling, the largest dimension is scaled to 1000 pixels
         elif self.full_size[0] > self.full_size[1]:
@@ -80,7 +97,7 @@ class HistologyData:
     def _remove_mask_border(self, mask, border=25):
         # A lot of slides have shadow/dark artefacts on the border that affect
         # the mask thresholding. We remove the border of the mask to avoid this.
-        mask_arr = sitk.GetArrayFromImage(mask)[0, :, :]
+        mask_arr = sitk.GetArrayFromImage(mask)
         mask_arr[:border, :] = 0
         mask_arr[-border:, :] = 0
         mask_arr[:, :border] = 0
@@ -113,9 +130,9 @@ class HistologyData:
     def get_chunk_mask(self, binary_mask_path, chunk_mask_path, n_parts=10):
         # BUG: There are no registered IO factories
         # RuntimeError: /Users/runner/work/image-graph-cut/image-graph-cut/be/install/include/ITK-5.4/itkImageFileReader.hxx:135:
-        #  Could not create IO object for reading file /Users/cathalye/Projects/proj_histo_mri_greedy_registration/scratch/binary.nii.gz
-        #  There are no registered IO factories.
-        #  Please visit https://www.itk.org/Wiki/ITK/FAQ#NoFactoryException to diagnose the problem.
+        # Could not create IO object for reading file /Users/cathalye/Projects/proj_histo_mri_greedy_registration/scratch/binary.nii.gz
+        # There are no registered IO factories.
+        # Please visit https://www.itk.org/Wiki/ITK/FAQ#NoFactoryException to diagnose the problem.
 
         # XXX: hard coded parameters
         # image_graph_cut(
