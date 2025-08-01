@@ -1,16 +1,9 @@
-import argparse
-import os
 import sys
-import warnings
-warnings.filterwarnings("ignore")
 
-import json
-import matplotlib.pyplot as plt
 import numpy as np
 import SimpleITK as sitk
 
-from histology_data import HistologyData
-
+from src.histology_data import HistologyData
 
 # https://github.com/pyushkevich/histoannot.git
 # git clone the GitHub repository and add the path to the sys.path
@@ -19,20 +12,17 @@ sys.path.append('/Users/cathalye/Packages/histoannot/')
 import phas.client.api as phas
 from phas.dltrain import spatial_transform_roi
 
-import utils
-
-
 class RemapROI:
 
     def __init__(self, registration_dir, moving_slide: HistologyData):
         self.registration_dir = registration_dir
-        self.chunk_mask = sitk.ReadImage(f"{registration_dir}/reference_multi_chunk.nii.gz")
+        self.chunk_mask = sitk.ReadImage(f"{registration_dir}/reference_chunk_mask.nii.gz")
         self.moving_slide = moving_slide
-        self.get_nearest_chunk_map(self.chunk_mask)
+        self._get_nearest_chunk_map(self.chunk_mask)
         self.moving_slide_single_channel = self.moving_slide.get_single_channel_image(channel=1)
 
 
-    def get_nearest_chunk_map(self, chunk_mask):
+    def _get_nearest_chunk_map(self, chunk_mask):
         # Explanation of this function in nearest_chunk_map.ipynb
         chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)[0, :, :]
 
@@ -56,8 +46,8 @@ class RemapROI:
     def get_chunk_transforms(self, x, y):
         chunk = self.nearest_chunk_map[(y, x)]
         chunk_str = f"{chunk:02d}"
-        chunk_rigid = np.loadtxt(f"{self.registration_dir}/output_piecewise_rigid_{chunk_str}.mat")
-        chunk_warp = sitk.ReadImage(f"{self.registration_dir}/output_piecewise_deformable_{chunk_str}.nii.gz")
+        chunk_rigid = np.loadtxt(f"{self.registration_dir}/transforms/piecewise_rigid_{chunk_str}.mat")
+        chunk_warp = sitk.ReadImage(f"{self.registration_dir}/transforms/piecewise_deformable_{chunk_str}.nii.gz")
 
         return chunk_warp, chunk_rigid
 
@@ -82,11 +72,11 @@ class RemapROI:
         A = chunk_rigid[:2, :2]
         b = chunk_rigid[:2, 2]
 
-        # XXX: How do you know which coordinate system warp is in use?
-        # Why did it not matter for the deformable transform?
-        # xy_warp is in LPS coordinate systen.
+        # NOTE:
+        # sitk uses LPS coordinate system, and c3d/greedy uses RAS
+        # xy_warp is in LPS coordinate system.
         # To go from LPS to RAS the transformation matrix
-        # \is [[-1, 0], [0, -1]] for a 2D image.
+        # is [[-1, 0], [0, -1]] for a 2D image.
         #
         # X_warp_RAS = -X_warp_LPS
         # X_rigid_RAS = A @ X_warp_RAS + b
@@ -94,9 +84,39 @@ class RemapROI:
         #
         # So to skip the back and forth conversion between LPS and RAS, we can
         # directly apply A @ X_warp - b to get the coordinates in LPS
-        xy_chunk_rigid = A @ xy_warp - b # -b to ensure all coordinates are in RAS
+        xy_chunk_rigid = A @ xy_warp - b
 
         # Get coordinates from physical space to index space in the moving image
         xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
 
         return xy_remap[0], xy_remap[1]
+
+
+def process_roi_data(roi_data, type, scale=1):
+    # Convert the ROI coordinates to from full resolution to thumbnail space
+    # Return it in the format that PHAS slie_sampling_roi expects
+    if type == 'polygon':
+        x_roi, y_roi = zip(*roi_data)
+        assert len(x_roi) == len(y_roi), "x_roi and y_roi must have the same length"
+        x_roi = np.array(x_roi)
+        y_roi = np.array(y_roi)
+
+        x_scaled_roi = (x_roi + 0.5) * scale
+        y_scaled_roi = (y_roi + 0.5) * scale
+
+        return [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi)]
+
+    elif type == 'trapezoid':
+        x_roi, y_roi, w_roi = zip(*roi_data)
+        assert len(x_roi) == len(y_roi) == len(w_roi), "x_roi, y_roi, and w_roi must have the same length"
+        x_roi = np.array(x_roi)
+        y_roi = np.array(y_roi)
+        w_roi = np.array(w_roi)
+
+        x_scaled_roi = (x_roi + 0.5) * scale
+        y_scaled_roi = (y_roi + 0.5) * scale
+        w_scaled_roi = w_roi * scale
+
+        return [list(pair) for pair in zip(x_scaled_roi, y_scaled_roi, w_scaled_roi)]
+    else:
+        raise ValueError(f"Unknown ROI type: {type}")

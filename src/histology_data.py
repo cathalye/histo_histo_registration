@@ -1,25 +1,6 @@
-"""
-This module contains the HistologyData class, which is used to load and process
-histology data.
-
-Inputs
-(1) Slide ID
-
-Processes
-(1) Get the scaling factor between full resolution slide and thumbnail
-(2) Get the binary mask of the slide
-(3) Get the chunk mask of the slide
-(4) Get the nearest chunk map of the slide
-
-Outputs
-
-
-"""
-
 import subprocess
 import sys
 
-import numpy as np
 import SimpleITK as sitk
 
 # https://github.com/pyushkevich/histoannot.git
@@ -39,31 +20,28 @@ class HistologyData:
             self.slide = phas.Slide(task, slide_id)
             self.full_size = self.slide.dimensions
 
-        if thumbnail_path is None:
-            self.thumbnail = None
-        else:
+        if thumbnail_path is not None:
             # NOTE:
-            # [:, :, 0] is needed for
-            # (1) registration.py to not throw a segmentation fault (!!!!)
-            # (2) remap_roi xy_remap = np.array(self.moving_slide_single_channel.TransformPhysicalPointToContinuousIndex(xy_chunk_rigid))
-            # to not get vector dimension error
-            #
-            # Nifti is file format for mainly 3D images whereas histology images are 2D
-            # So histology images are store as (width, height, 1) - even RGB images
-            # This is because the RGB values are stored as vectors
+            # Nifti is file format for mainly 3D images whereas histology images are 2D.
+            # So chead histology images are store as (width, height, 1) -- even RGB images.
+            # This is because the RGB values are stored as vectors.
             # sitk.ReadImage reads chead RGB histology image as (width, height, 1)
-            # [:, :, 0] drops the last dimension
+            # [:, :, 0] drops the last dimension NOT a channel
+            # When sitk (width, height) image is converted to numpy array,
+            # it is (width, height, 3) as expected for RGB images
             #
-            # When sitk (width, height) image is converted to numpy array, it is (width, height, 3) as expected for RGB images
-            self.thumbnail = sitk.ReadImage(thumbnail_path)
-            # self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
+            # [:, :, 0] is needed for TransformPhysicalPointToContinuousIndex in remap_roi.py
+            # otherwise, it will throw an dimension mismatch error
+            self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
             self.thumbnail_size = self.thumbnail.GetSize()
+        else:
+            self.thumbnail = None
 
         self._get_scaling_factor()
 
 
     def _get_scaling_factor(self):
-        if self.thumbnail is None or self.slide is None:
+        if self.slide is None:
             self.scaling_factor = 1
         # When downsampling, the largest dimension is scaled to 1000 pixels
         elif self.full_size[0] > self.full_size[1]:
@@ -88,12 +66,19 @@ class HistologyData:
         return x_full, y_full
 
 
-    def get_single_channel_image(self, channel=0):
+    def get_single_channel_image(self, channel=0, save_path=None, return_img=True):
         single_channel_image = sitk.VectorIndexSelectionCast(self.thumbnail, channel)
-        return single_channel_image
+
+        if save_path is not None:
+            sitk.WriteImage(single_channel_image, save_path)
+
+        if return_img:
+            return single_channel_image
+        else:
+            return None
 
 
-    def get_binary_mask(self, channel=1):
+    def get_binary_mask(self, channel=1, save_path=None, return_img=True):
         # get the single channel image
         single_channel = self.get_single_channel_image(channel=channel)
 
@@ -109,7 +94,13 @@ class HistologyData:
         radius = [5, 5, 5]
         closed_mask = sitk.BinaryMorphologicalClosing(binary_mask, radius, structuring_element)
 
-        return closed_mask
+        if save_path is not None:
+            sitk.WriteImage(closed_mask, save_path)
+
+        if return_img:
+            return closed_mask
+        else:
+            return None
 
 
     def get_chunk_mask(self, binary_mask_path, chunk_mask_path, n_parts=10):
