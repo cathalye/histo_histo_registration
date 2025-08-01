@@ -55,9 +55,8 @@ class HistologyData:
             # [:, :, 0] drops the last dimension
             #
             # When sitk (width, height) image is converted to numpy array, it is (width, height, 3) as expected for RGB images
-            # It also plays well with VectorIndexSelectionCast
-            self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
-            # self.thumbnail = sitk.ReadImage(thumbnail_path)
+            self.thumbnail = sitk.ReadImage(thumbnail_path)
+            # self.thumbnail = sitk.ReadImage(thumbnail_path)[:, :, 0]
             self.thumbnail_size = self.thumbnail.GetSize()
 
         self._get_scaling_factor()
@@ -94,18 +93,6 @@ class HistologyData:
         return single_channel_image
 
 
-    def _remove_mask_border(self, mask, border=25):
-        # A lot of slides have shadow/dark artefacts on the border that affect
-        # the mask thresholding. We remove the border of the mask to avoid this.
-        mask_arr = sitk.GetArrayFromImage(mask)
-        mask_arr[:border, :] = 0
-        mask_arr[-border:, :] = 0
-        mask_arr[:, :border] = 0
-        mask_arr[:, -border:] = 0
-
-        return sitk.GetImageFromArray(mask_arr)
-
-
     def get_binary_mask(self, channel=1):
         # get the single channel image
         single_channel = self.get_single_channel_image(channel=channel)
@@ -119,10 +106,8 @@ class HistologyData:
         # Dilation to fill the holes
         structuring_element = sitk.sitkBall
         # XXX: hard coded radius
-        radius = [2, 2, 2]
+        radius = [5, 5, 5]
         closed_mask = sitk.BinaryMorphologicalClosing(binary_mask, radius, structuring_element)
-
-        closed_mask = self._remove_mask_border(closed_mask)
 
         return closed_mask
 
