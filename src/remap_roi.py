@@ -26,6 +26,14 @@ class RemapROI:
         # Explanation of this function in nearest_chunk_map.ipynb
         chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)[0, :, :]
 
+        # Remove 50 pixels along all borders to avoid wrong "dark edge" segmentation
+        chunk_mask_arr[:50, :] = 0
+        chunk_mask_arr[-50:, :] = 0
+        chunk_mask_arr[:, :50] = 0
+        chunk_mask_arr[:, -50:] = 0
+
+        chunk_mask = sitk.GetImageFromArray(chunk_mask_arr)
+
         chunk_labels = np.unique(chunk_mask_arr)
         chunk_labels = chunk_labels[chunk_labels != 0] # Remove the background label
 
@@ -69,12 +77,14 @@ class RemapROI:
         # Step 2: Evaluate the piecewise rigid transform
         # The piecewise rigid transform also considers the global rigid transform
         # so no need to apply that separately
-        A = chunk_rigid[:2, :2]
-        b = chunk_rigid[:2, 2]
+        A = chunk_rigid[:2, :2] # Rotation
+        b = chunk_rigid[:2, 2] # Translation
 
         # NOTE:
-        # sitk uses LPS coordinate system, and c3d/greedy uses RAS
-        # xy_warp is in LPS coordinate system.
+        # sitk uses LPS coordinate system and greedy uses RAS which means that
+        # xy_warp is in LPS system but the rigid transform is in RAS.
+        # We need both of them in the same system to apply the transform
+        #
         # To go from LPS to RAS the transformation matrix
         # is [[-1, 0], [0, -1]] for a 2D image.
         #
