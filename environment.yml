@@ -1,0 +1,13 @@
+name: greedy_registration
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy=1.26.4
+  - simpleitk=2.5.2
+  - openslide-python=1.4.1
+  - pip:
+    - phas==0.98.9
+    - picsl_greedy==0.0.6
+    - picsl_image_graph_cut==0.0.2

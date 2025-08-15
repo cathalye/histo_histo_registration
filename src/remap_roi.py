@@ -12,6 +12,7 @@ sys.path.append('/Users/cathalye/Packages/histoannot/')
 import phas.client.api as phas
 from phas.dltrain import spatial_transform_roi
 
+
 class RemapROI:
 
     def __init__(self, registration_dir, moving_slide: HistologyData):
@@ -23,6 +24,23 @@ class RemapROI:
 
 
     def _get_nearest_chunk_map(self, chunk_mask):
+        """
+        Create a nearest chunk mapping for coordinate transformation.
+
+        For each pixel, finds the nearest chunk boundary and assigns the corresponding
+        chunk label. This enables proper transform selection for ROI coordinate mapping.
+
+        Algorithm:
+        1. Remove border pixels to avoid edge artifacts
+        2. For each chunk, compute distance map from chunk boundary
+        3. Assign each pixel to the chunk with minimum distance
+
+        Args:
+            chunk_mask: SimpleITK image with chunk labels
+
+        Note:
+            Detailed explanation available in docs/nearest_chunk_map.ipynb
+        """
         # Explanation of this function in nearest_chunk_map.ipynb
         chunk_mask_arr = sitk.GetArrayFromImage(chunk_mask)[0, :, :]
 
@@ -61,6 +79,23 @@ class RemapROI:
 
 
     def registration_transform(self, xy):
+        """
+        Apply registration transforms to convert coordinates from reference to moving image.
+
+        This function applies piecewise deformable and rigid transformations in sequence.
+        Handles coordinate system conversion between LPS (SimpleITK) and RAS (Greedy).
+
+        Args:
+            xy (array-like): Input coordinates [x, y] in reference image space
+
+        Returns:
+            tuple: Transformed coordinates (x, y) in moving image space
+
+        Note:
+            Transformations are applied in reverse order: deformable -> rigid.
+            Coordinate system conversion: LPS (SimpleITK) <-> RAS (Greedy)
+            Mathematical derivation: A @ xy_warp - b avoids explicit LPS/RAS conversion
+        """
         # Apply the transformations to the sampling ROI in the opposite order
         # i.e first the piecewise deformable, then the piecewise rigid
         # All transformations are applied in the physical space]
@@ -93,7 +128,7 @@ class RemapROI:
         # X_rigid_LPS = -X_rigid_RAS = -A @ X_warp_RAS - b = A @ X_warp_LPS - b
         #
         # So to skip the back and forth conversion between LPS and RAS, we can
-        # directly apply A @ X_warp - b to get the coordinates in LPS
+        # directly apply A @ xy_warp - b to get the coordinates in LPS
         xy_chunk_rigid = A @ xy_warp - b
 
         # Get coordinates from physical space to index space in the moving image
@@ -103,6 +138,29 @@ class RemapROI:
 
 
 def process_roi_data(roi_data, type, scale=1):
+    """
+    Convert ROI coordinates between full resolution and thumbnail space.
+
+    Handles different ROI types (polygon, trapezoid) and applies coordinate scaling.
+    Returns data in the format expected by PHAS slide_sampling_roi.
+
+    Args:
+        roi_data (list): List of coordinate pairs or triplets
+        type (str): ROI type - 'polygon' or 'trapezoid'
+        scale (float): Scaling factor (default=1 for no scaling)
+
+    Returns:
+        list: Scaled coordinates in PHAS format
+
+    Examples:
+        # Polygon ROI
+        roi_data = [[x1, y1], [x2, y2], [x3, y3]]
+        scaled = process_roi_data(roi_data, 'polygon', scale=0.1)
+
+        # Trapezoid ROI
+        roi_data = [[x1, y1, w1], [x2, y2, w2]]
+        scaled = process_roi_data(roi_data, 'trapezoid', scale=0.1)
+    """
     # Convert the ROI coordinates to from full resolution to thumbnail space
     # Return it in the format that PHAS slie_sampling_roi expects
     if type == 'polygon':
